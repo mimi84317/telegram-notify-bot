@@ -30,6 +30,7 @@ if not CHAT_ID:
 
 # 初始化 Telegram Bot
 bot = Bot(token=TOKEN)
+scheduled_ptt_title = None  # 儲存目前設定的 PTT 看板名稱
 
 # /start 指令的處理函數
 async def start(update: Update, context):
@@ -37,9 +38,11 @@ async def start(update: Update, context):
 
 # 處理用戶傳來的文字訊息
 async def echo(update: Update, context):
+    global scheduled_ptt_title
     user_message = update.message.text.strip()
+    scheduled_ptt_title = user_message  # 更新目前的看板名稱
     titles = await fetch_titles(ptt_title=user_message)
-    message = f"看板 {user_message} 最新文章標題：\n" + "\n".join(titles)
+    message = f"看板 {user_message} 最新文章標題：\n" + "\n".join(titles[:5])
     await update.message.reply_text(message)
 
 # 爬取 PTT 看板的標題
@@ -51,68 +54,68 @@ async def fetch_titles(ptt_title):
             async with session.get(url) as response:
                 if response.status == 404:
                     return [f"看板 {ptt_title} 不存在，請確認名稱。"]
-                
-                # 使用 await 等待 response.text() 以獲取文本內容
+
                 response_text = await response.text()  
     except Exception as e:
         print(f"發生錯誤：{e}")
         return ["發生錯誤，請確認看板名稱是否正確。"]
 
-    # 這裡傳入的是獲取到的字符串內容
     soup = BeautifulSoup(response_text, 'html.parser')
     titles = soup.find_all('div', class_='title')
 
     messages = []
     for title in titles:
-        if title.a:  # 確認標題存在
+        if title.a:  
             messages.append(title.a.text.strip())
-    
+
     if messages:
         return messages
     return ["無法擷取標題"]
+
 # 發送訊息到 Telegram
 async def send_message(message, chat_id):
     await bot.send_message(chat_id=chat_id, text=message)
 
 # 定時執行的任務
-async def job(chat_id, ptt_title):
-    titles = await fetch_titles(ptt_title)
-    message = "PTT {ptt_title} 最新文章標題：\n" + "\n".join(titles[:5]) 
+async def job(chat_id):
+    if not scheduled_ptt_title:
+        return  
+    titles = await fetch_titles(scheduled_ptt_title)
+    message = f"PTT {scheduled_ptt_title} 最新文章標題：\n" + "\n".join(titles[:5])
     await send_message(message, chat_id)
     print("訊息已推送！")
 
+# 包裝 schedule 的非同步函式
+async def run_scheduler():
+    while True:
+        schedule.run_pending()
+        await asyncio.sleep(1)  # 每秒檢查一次排程
+
 # 設定排程 (每 30 分鐘執行一次)
-def schedule_job(chat_id, ptt_title):
-    schedule.every(30).minutes.do(lambda: asyncio.run(job(chat_id)))  # 使用 asyncio.run 運行異步的 job
+def schedule_job(chat_id):
+    schedule.every(30).minutes.do(lambda: asyncio.create_task(job(chat_id)))
 
 # 設定機器人
-def main():
+async def main():
     app = Application.builder().token(TOKEN).build()
 
-    # 指令處理器
     app.add_handler(CommandHandler("start", start))
-
-    # 文字訊息處理器
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, echo))
-
 
     print("機器人啟動中...")
 
-    # 啟動機器人
-    loop = asyncio.get_event_loop()
-    loop.create_task(app.run_polling())
+    await app.initialize()
+    await app.start()
+    await app.updater.start_polling()
 
-    # 設定排程
+    # 啟動排程
     if CHAT_ID:
-        schedule_job(CHAT_ID)
-    else:
-        print("未設定 CHAT_ID，請檢查 .env 檔案。")
-    
-    # 定期檢查排程
-    while True:
-        schedule.run_pending()
-        time.sleep(1)
+        asyncio.create_task(run_scheduler())
+
+    # 保持機器人運行
+    await asyncio.Event().wait()
+
 
 if __name__ == "__main__":
-    main()
-   
+    # 啟動 Telegram Bot
+    asyncio.run(main())
