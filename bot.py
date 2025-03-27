@@ -34,7 +34,7 @@ scheduled_ptt_title = None  # 儲存目前設定的 PTT 看板名稱
 
 # /start 指令的處理函數
 async def start(update: Update, context):
-    await update.message.reply_text("請輸入看板")
+    await update.message.reply_text("歡迎使用 PTT 機器人！請輸入看板名稱開始查詢最新文章。")
 
 # 處理用戶傳來的文字訊息
 async def echo(update: Update, context):
@@ -81,19 +81,19 @@ async def job(chat_id):
     if not scheduled_ptt_title:
         return  
     titles = await fetch_titles(scheduled_ptt_title)
-    message = f"PTT {scheduled_ptt_title} 最新文章標題：\n" + "\n".join(titles[:5])
+    message = f"PTT {scheduled_ptt_title} 最新文章標題：\n" + "\n".join(titles)
     await send_message(message, chat_id)
     print("訊息已推送！")
 
-# 包裝 schedule 的非同步函式
+# 包裝 schedule 的非同步函數
 async def run_scheduler():
     while True:
         schedule.run_pending()
         await asyncio.sleep(1)  # 每秒檢查一次排程
 
-# 設定排程 (每 30 分鐘執行一次)
+# 設定排程 ( 每 30 分鐘執行一次 )
 def schedule_job(chat_id):
-    schedule.every(30).minutes.do(lambda: asyncio.create_task(job(chat_id)))
+    schedule.every(1).minutes.do(lambda: asyncio.create_task(job(chat_id)))
 
 # 設定機器人
 async def main():
