@@ -42,7 +42,7 @@ async def echo(update: Update, context):
     user_message = update.message.text.strip()
     scheduled_ptt_title = user_message  # 更新目前的看板名稱
     titles = await fetch_titles(ptt_title=user_message)
-    message = f"看板 {user_message} 最新文章標題：\n" + "\n".join(titles[:5])
+    message = f"看板 {user_message} 最新文章標題：\n" + "\n".join(titles)
     await update.message.reply_text(message)
 
 # 爬取 PTT 看板的標題
@@ -110,6 +110,7 @@ async def main():
 
     # 啟動排程
     if CHAT_ID:
+        schedule_job(CHAT_ID)
         asyncio.create_task(run_scheduler())
 
     # 保持機器人運行
