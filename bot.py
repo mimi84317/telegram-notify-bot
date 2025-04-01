@@ -31,10 +31,11 @@ if not CHAT_ID:
 # 初始化 Telegram Bot
 bot = Bot(token=TOKEN)
 scheduled_ptt_title = None  # 儲存目前設定的 PTT 看板名稱
+latest_post_urls = set()  # 記錄已推送過的文章網址
 
 # /start 指令的處理函數
 async def start(update: Update, context):
-    await update.message.reply_text("歡迎使用 PTT 機器人！請輸入看板名稱開始查詢最新文章。")
+    await update.message.reply_text("\u6b61\u8fce\u4f7f\u7528 PTT \u6a5f\u5668\u4eba\uff01\u8acb\u8f38\u5165\u770b\u677f\u540d\u7a31\u958b\u59cb\u67e5\u8a62\u6700\u65b0\u6587\u7ae0\u3002")
 
 # 處理用戶傳來的文字訊息
 async def echo(update: Update, context):
@@ -42,81 +43,68 @@ async def echo(update: Update, context):
     user_message = update.message.text.strip()
     scheduled_ptt_title = user_message  # 更新目前的看板名稱
     titles = await fetch_titles(ptt_title=user_message)
-    message = f"看板 {user_message} 最新文章標題：\n" + "\n".join(titles)
+    message = f"看板 {user_message} 最新文章：\n" + "\n".join(titles)
     await update.message.reply_text(message)
 
-# 爬取 PTT 看板的標題
+# 爬取 PTT 看板的標題、作者、發文時間、網址
 async def fetch_titles(ptt_title):
     url = f"https://www.ptt.cc/bbs/{ptt_title}/index.html"
-
     try:
         async with aiohttp.ClientSession(cookies={'over18': '1'}) as session:
             async with session.get(url) as response:
                 if response.status == 404:
                     return [f"看板 {ptt_title} 不存在，請確認名稱。"]
-
-                response_text = await response.text()  
+                response_text = await response.text()
     except Exception as e:
         print(f"發生錯誤：{e}")
         return ["發生錯誤，請確認看板名稱是否正確。"]
 
     soup = BeautifulSoup(response_text, 'html.parser')
-    titles = soup.find_all('div', class_='title')
-
+    titles = soup.find_all('div', class_='r-ent')
     messages = []
-    for title in titles:
-        if title.a:  
-            messages.append(title.a.text.strip())
-
-    if messages:
-        return messages
-    return ["無法擷取標題"]
+    
+    global latest_post_urls
+    new_post_urls = set()
+    
+    for entry in titles:
+        title_tag = entry.find('div', class_='title').a
+        if title_tag:
+            title = title_tag.text.strip()
+            post_url = f"https://www.ptt.cc{title_tag['href']}"
+            new_post_urls.add(post_url)
+            if post_url in latest_post_urls:
+                continue  # 跳過已推送的文章
+            
+            async with aiohttp.ClientSession(cookies={'over18': '1'}) as session:
+                async with session.get(post_url) as response:
+                    post_soup = BeautifulSoup(await response.text(), 'html.parser')
+                    meta_info = post_soup.find_all('span', class_='article-meta-value')
+                    date = meta_info[3].text.strip() if len(meta_info) > 3 else "未知"
+            
+            messages.append(f"標題: {title}\n時間: {date}\n網址: {post_url}\n")
+    
+    latest_post_urls = new_post_urls
+    return messages if messages else ["沒有新的文章"]
 
 # 發送訊息到 Telegram
 async def send_message(message, chat_id):
     await bot.send_message(chat_id=chat_id, text=message)
 
-# 定時執行的任務
-async def job(chat_id):
-    if not scheduled_ptt_title:
-        return  
-    titles = await fetch_titles(scheduled_ptt_title)
-    message = f"PTT {scheduled_ptt_title} 最新文章標題：\n" + "\n".join(titles)
-    await send_message(message, chat_id)
-    print("訊息已推送！")
-
-# 包裝 schedule 的非同步函數
-async def run_scheduler():
-    while True:
-        schedule.run_pending()
-        await asyncio.sleep(1)  # 每秒檢查一次排程
-
 # 設定排程 ( 每 30 分鐘執行一次 )
 def schedule_job(chat_id):
-    schedule.every(1).minutes.do(lambda: asyncio.create_task(job(chat_id)))
+    schedule.every(30).minutes.do(lambda: asyncio.create_task(job(chat_id)))
 
 # 設定機器人
 async def main():
     app = Application.builder().token(TOKEN).build()
-
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, echo))
-
-    print("機器人啟動中...")
-
+    print("Telegram 機器人已啟動...")
     await app.initialize()
     await app.start()
     await app.updater.start_polling()
-
-    # 啟動排程
-    if CHAT_ID:
-        schedule_job(CHAT_ID)
-        asyncio.create_task(run_scheduler())
-
-    # 保持機器人運行
     await asyncio.Event().wait()
 
-
 if __name__ == "__main__":
-    # 啟動 Telegram Bot
+    schedule_job(CHAT_ID)
     asyncio.run(main())
